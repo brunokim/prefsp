@@ -20,9 +20,9 @@ func NewErrorList(errors ...error) error {
 }
 
 func (e ErrorList) Error() string {
-	var errs []string
+	errs := make([]string, len(e))
 	for i, err := range e {
 		errs[i] = err.Error()
 	}
-	return strings.Join(errs, "\n")
+	return "\n\t" + strings.Join(errs, "\n\t")
 }
