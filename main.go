@@ -28,10 +28,9 @@ var (
 func main() {
 	// Initial setup
 	flag.Parse()
-	terms, err1 := csv.NewReader(strings.NewReader(*keywords)).Read()
-	languages, err2 := csv.NewReader(strings.NewReader(*languages)).Read()
-	if err := errors.NewErrorList(err1, err2); err != nil {
-		log.Fatalf("Malformed flag: %v", err)
+	keywords, languages, err := checkFlags()
+	if err != nil {
+		log.Fatalf("Error while validating flags: %v", err)
 	}
 
 	// Connect to Twitter and start handling messages
@@ -40,7 +39,7 @@ func main() {
 		log.Fatalf("Error creating auth client: %v", err)
 	}
 	client := twitter.NewClient(authClient)
-	stream, err := startStream(client, terms, languages)
+	stream, err := startStream(client, keywords, languages)
 	if err != nil {
 		log.Fatalf("Error creating client: %v", err)
 	}
@@ -53,6 +52,24 @@ func main() {
 	// Exit
 	log.Print("Closing connection")
 	stream.Stop()
+}
+
+func checkFlags() ([]string, []string, error) {
+	if *keywords == "" {
+		return nil, nil, fmt.Errorf("keywords flag cannot be empty")
+	}
+	terms, err := csv.NewReader(strings.NewReader(*keywords)).Read()
+	if err != nil {
+		return nil, nil, fmt.Errorf("malformed keywords flag: %v", err)
+	}
+	if *languages == "" {
+		return terms, nil, nil
+	}
+	langs, err := csv.NewReader(strings.NewReader(*languages)).Read()
+	if err != nil {
+		return nil, nil, fmt.Errorf("malformed languages flag: %v", err)
+	}
+	return terms, langs, nil
 }
 
 func newTwitterAuthClient() (*http.Client, error) {
