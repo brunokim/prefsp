@@ -12,37 +12,40 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/brunokim/prefsp/errors"
 
 	_ "github.com/joho/godotenv/autoload"
 
-	"cloud.google.com/go/firestore"
+	"cloud.google.com/go/storage"
 	"github.com/dghubble/go-twitter/twitter"
 	"github.com/dghubble/oauth1"
+	"github.com/google/uuid"
 )
 
 var (
-	keywords        = flag.String("keywords", "", "Set of comma-separated keywords to track")
-	languages       = flag.String("languages", "pt", "Set of comma-separated languages to filter")
-	googleProjectID = flag.String("google-project-id", "prefs-2020", "Project ID for Google Firestore database")
+	keywords   = flag.String("keywords", "", "Set of comma-separated keywords to track")
+	languages  = flag.String("languages", "pt", "Set of comma-separated languages to filter")
+	bucketName = flag.String("bucket", "prefs-2020", "Bucket for storing tweets objects")
 )
 
 func main() {
 	// Initial setup
 	flag.Parse()
-	keywords, languages, err := checkFlags()
+	keywords, languages, bucketName, err := checkFlags()
 	if err != nil {
 		log.Fatalf("Error while validating flags: %v", err)
 	}
 
 	// Connect to Firestore database
 	ctx := context.Background()
-	db, err := firestore.NewClient(ctx, *googleProjectID)
+	fs, err := storage.NewClient(ctx)
 	if err != nil {
-		log.Fatalf("Error while connecting to FireStore DB: %v", err)
+		log.Fatalf("Error while connecting to Cloud Storage: %v", err)
 	}
-	log.Printf("Connected to FireStore DB")
+	bucket := fs.Bucket(bucketName)
+	log.Printf("Connected to Cloud Storage")
 
 	// Connect to Twitter and start handling messages
 	authClient, err := newTwitterAuthClient()
@@ -50,7 +53,7 @@ func main() {
 		log.Fatalf("Error creating auth client: %v", err)
 	}
 	client := twitter.NewClient(authClient)
-	stream, err := startStream(ctx, db, client, keywords, languages)
+	stream, err := startStream(ctx, bucket, client, keywords, languages)
 	if err != nil {
 		log.Fatalf("Error creating client: %v", err)
 	}
@@ -63,25 +66,28 @@ func main() {
 	// Exit
 	log.Print("Closing connections")
 	stream.Stop()
-	db.Close()
+	fs.Close()
 }
 
-func checkFlags() ([]string, []string, error) {
+func checkFlags() ([]string, []string, string, error) {
 	if *keywords == "" {
-		return nil, nil, fmt.Errorf("keywords flag cannot be empty")
+		return nil, nil, "", fmt.Errorf("keywords flag cannot be empty")
 	}
 	terms, err := csv.NewReader(strings.NewReader(*keywords)).Read()
 	if err != nil {
-		return nil, nil, fmt.Errorf("malformed keywords flag: %v", err)
+		return nil, nil, "", fmt.Errorf("malformed keywords flag: %v", err)
 	}
-	if *languages == "" {
-		return terms, nil, nil
+	if *bucketName == "" {
+		return nil, nil, "", fmt.Errorf("empty bucket name flag")
 	}
-	langs, err := csv.NewReader(strings.NewReader(*languages)).Read()
-	if err != nil {
-		return nil, nil, fmt.Errorf("malformed languages flag: %v", err)
+	var langs []string
+	if *languages != "" {
+		langs, err = csv.NewReader(strings.NewReader(*languages)).Read()
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("malformed languages flag: %v", err)
+		}
 	}
-	return terms, langs, nil
+	return terms, langs, *bucketName, nil
 }
 
 func newTwitterAuthClient() (*http.Client, error) {
@@ -104,7 +110,7 @@ func newTwitterAuthClient() (*http.Client, error) {
 	return config.Client(oauth1.NoContext, token), nil
 }
 
-func startStream(ctx context.Context, db *firestore.Client, client *twitter.Client, terms []string, languages []string) (*twitter.Stream, error) {
+func startStream(ctx context.Context, bucket *storage.BucketHandle, client *twitter.Client, terms []string, languages []string) (*twitter.Stream, error) {
 	stream, err := client.Streams.Filter(&twitter.StreamFilterParams{
 		Track:         terms,
 		Language:      languages,
@@ -115,33 +121,39 @@ func startStream(ctx context.Context, db *firestore.Client, client *twitter.Clie
 	}
 	log.Printf("Successfully connected to Twitter stream for terms %v in languages %v", terms, languages)
 	demux := twitter.NewSwitchDemux()
-	demux.All = func(msg interface{}) { handleAllMessages(ctx, db, msg) }
-	demux.Tweet = func(tweet *twitter.Tweet) { handleTweet(ctx, db, tweet) }
+	demux.All = func(msg interface{}) { handleAllMessages(ctx, bucket, msg) }
+	demux.Tweet = func(tweet *twitter.Tweet) { handleTweet(ctx, bucket, tweet) }
 	go demux.HandleChan(stream.Messages)
 	return stream, nil
 }
 
-func handleAllMessages(ctx context.Context, db *firestore.Client, msg interface{}) {
+func handleAllMessages(ctx context.Context, bucket *storage.BucketHandle, msg interface{}) {
 	if _, ok := msg.(*twitter.Tweet); ok {
 		return
 	}
-	write(ctx, db, "messages", msg)
+	log.Printf("%T", msg)
+	write(ctx, bucket, "messages", msg)
 }
 
-func handleTweet(ctx context.Context, db *firestore.Client, tweet *twitter.Tweet) {
-	write(ctx, db, "tweets", tweet)
+func handleTweet(ctx context.Context, bucket *storage.BucketHandle, tweet *twitter.Tweet) {
+	write(ctx, bucket, "tweets", tweet)
 }
 
-func write(ctx context.Context, db *firestore.Client, collection string, data interface{}) {
+func write(ctx context.Context, bucket *storage.BucketHandle, folder string, data interface{}) {
 	bs, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("Error marshaling struct in %q: %v", collection, err)
+		log.Printf("Error marshaling struct in %q: %v", folder, err)
 		return
 	}
-	_, result, err := db.Collection(collection).Add(ctx, map[string]interface{}{"data": string(bs)})
-	if err != nil {
-		log.Printf("Error writing data to %q: %v", collection, err)
+	date := time.Now().UTC().Format("2006-01-02")
+	name := fmt.Sprintf("%s/dt=%s/%v.json", folder, date, uuid.New())
+	w := bucket.Object(name).NewWriter(ctx)
+	if _, err := w.Write(bs); err != nil {
+		log.Printf("Error writing data to %s: %v", name, err)
 	} else {
-		log.Printf("Wrote data to %q @ %v", collection, result.UpdateTime)
+		log.Printf("Wrote data to %s", name)
+	}
+	if err := w.Close(); err != nil {
+		log.Printf("Error closing object %s: %v", name, err)
 	}
 }
