@@ -19,6 +19,7 @@ RUN set -x \
 
 # Copy secrets and server, and execute it
 COPY .env .env
+COPY google-application-credentials.json google-application-credentials.json
 COPY --from=builder /app/server /app/server
 CMD ["/app/server", "-keywords", "bruno covas"]
 

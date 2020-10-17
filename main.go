@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"flag"
@@ -16,13 +17,15 @@ import (
 
 	_ "github.com/joho/godotenv/autoload"
 
+	"cloud.google.com/go/firestore"
 	"github.com/dghubble/go-twitter/twitter"
 	"github.com/dghubble/oauth1"
 )
 
 var (
-	keywords  = flag.String("keywords", "", "Set of comma-separated keywords to track")
-	languages = flag.String("languages", "pt", "Set of comma-separated languages to filter")
+	keywords        = flag.String("keywords", "", "Set of comma-separated keywords to track")
+	languages       = flag.String("languages", "pt", "Set of comma-separated languages to filter")
+	googleProjectID = flag.String("google-project-id", "prefs-2020", "Project ID for Google Firestore database")
 )
 
 func main() {
@@ -33,13 +36,21 @@ func main() {
 		log.Fatalf("Error while validating flags: %v", err)
 	}
 
+	// Connect to Firestore database
+	ctx := context.Background()
+	db, err := firestore.NewClient(ctx, *googleProjectID)
+	if err != nil {
+		log.Fatalf("Error while connecting to FireStore DB: %v", err)
+	}
+	log.Printf("Connected to FireStore DB")
+
 	// Connect to Twitter and start handling messages
 	authClient, err := newTwitterAuthClient()
 	if err != nil {
 		log.Fatalf("Error creating auth client: %v", err)
 	}
 	client := twitter.NewClient(authClient)
-	stream, err := startStream(client, keywords, languages)
+	stream, err := startStream(ctx, db, client, keywords, languages)
 	if err != nil {
 		log.Fatalf("Error creating client: %v", err)
 	}
@@ -50,8 +61,9 @@ func main() {
 	<-ch
 
 	// Exit
-	log.Print("Closing connection")
+	log.Print("Closing connections")
 	stream.Stop()
+	db.Close()
 }
 
 func checkFlags() ([]string, []string, error) {
@@ -92,7 +104,7 @@ func newTwitterAuthClient() (*http.Client, error) {
 	return config.Client(oauth1.NoContext, token), nil
 }
 
-func startStream(client *twitter.Client, terms []string, languages []string) (*twitter.Stream, error) {
+func startStream(ctx context.Context, db *firestore.Client, client *twitter.Client, terms []string, languages []string) (*twitter.Stream, error) {
 	stream, err := client.Streams.Filter(&twitter.StreamFilterParams{
 		Track:         terms,
 		Language:      languages,
@@ -103,20 +115,33 @@ func startStream(client *twitter.Client, terms []string, languages []string) (*t
 	}
 	log.Printf("Successfully connected to Twitter stream for terms %v in languages %v", terms, languages)
 	demux := twitter.NewSwitchDemux()
-	demux.All = handleAllMessages
-	demux.Tweet = handleTweet
+	demux.All = func(msg interface{}) { handleAllMessages(ctx, db, msg) }
+	demux.Tweet = func(tweet *twitter.Tweet) { handleTweet(ctx, db, tweet) }
 	go demux.HandleChan(stream.Messages)
 	return stream, nil
 }
 
-func handleAllMessages(message interface{}) {
-	if _, ok := message.(*twitter.Tweet); ok {
+func handleAllMessages(ctx context.Context, db *firestore.Client, msg interface{}) {
+	if _, ok := msg.(*twitter.Tweet); ok {
 		return
 	}
-	bs, _ := json.MarshalIndent(message, "", "  ")
-	log.Print(string(bs))
+	write(ctx, db, "messages", msg)
 }
 
-func handleTweet(tweet *twitter.Tweet) {
-	log.Print(tweet.Text)
+func handleTweet(ctx context.Context, db *firestore.Client, tweet *twitter.Tweet) {
+	write(ctx, db, "tweets", tweet)
+}
+
+func write(ctx context.Context, db *firestore.Client, collection string, data interface{}) {
+	bs, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("Error marshaling struct in %q: %v", collection, err)
+		return
+	}
+	_, result, err := db.Collection(collection).Add(ctx, map[string]interface{}{"data": string(bs)})
+	if err != nil {
+		log.Printf("Error writing data to %q: %v", collection, err)
+	} else {
+		log.Printf("Wrote data to %q @ %v", collection, result.UpdateTime)
+	}
 }

@@ -1,2 +1,3 @@
 # Don't ignore secrets file during build & deploy
 !.env
+!google-application-credentials.json

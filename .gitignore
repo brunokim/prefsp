@@ -1,4 +1,5 @@
 .env
+google-application-credentials.json
 
 .*.swp
 .*.swo
