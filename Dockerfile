@@ -21,5 +21,25 @@ RUN set -x \
 COPY .env .env
 COPY google-application-credentials.json google-application-credentials.json
 COPY --from=builder /app/server /app/server
-CMD ["/app/server", "-keywords", "bruno covas"]
+CMD [ \
+    "/app/server", \
+    "-keywords", \
+        "bruno covas,\
+         russomano,\
+         joyce hasselmann,\
+         jilmar tatto,\
+         guilherme boulos,\
+         boulos,\
+         andrea matarazzo,\
+         arthur do val,\
+         mamaefalei,\
+         marina helou,\
+         orlando silva,\
+         levy fidelix,\
+         filipe sabará,\
+         márcio frança,\
+         vera lúcia,\
+         eleições sp,\
+         prefeitura sp",\
+     "-languages", ""]
 
