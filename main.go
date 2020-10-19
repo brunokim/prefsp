@@ -38,7 +38,7 @@ func main() {
 		log.Fatalf("Error while validating flags: %v", err)
 	}
 
-	// Connect to Firestore database
+	// Connect to Cloud Storage
 	ctx := context.Background()
 	fs, err := storage.NewClient(ctx)
 	if err != nil {
