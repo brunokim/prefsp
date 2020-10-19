@@ -6,9 +6,9 @@ WORKDIR /app
 COPY go.* ./
 RUN go mod download
 
-# Copy all other non-ignored files and build server
+# Copy all other non-ignored files and build binaries
 COPY . ./
-RUN go build -mod=readonly -v -o server
+RUN go build -mod=readonly -v -o bin/fetch-tweets ./fetch
 
 ## Production container
 FROM debian:buster-slim
@@ -20,9 +20,9 @@ RUN set -x \
 # Copy secrets and server, and execute it
 COPY .env .env
 COPY google-application-credentials.json google-application-credentials.json
-COPY --from=builder /app/server /app/server
+COPY --from=builder /app/fetch-tweets /app/fetch-tweets
 CMD [ \
-    "/app/server", \
+    "/app/fetch-tweets", \
     "-keywords", \
         "bruno covas,\
          russomano,\

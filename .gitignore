@@ -4,5 +4,4 @@ google-application-credentials.json
 .*.swp
 .*.swo
 
-main
-server
+bin/
