@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/brunokim/prefsp/errors"
+	"github.com/brunokim/prefsp/progress"
 
 	_ "github.com/joho/godotenv/autoload"
 
@@ -165,26 +166,27 @@ func startStream(ctx context.Context, bucket *storage.BucketHandle, client *twit
 	log.Printf("Terms:\n\t%v", strings.Join(terms, "\n\t"))
 	log.Printf("Users:\n\t%v", strings.Join(follow, "\n\t"))
 	log.Printf("Languages:\n\t%v", strings.Join(languages, "\n\t"))
+	logger := progress.NewWriterLogger(time.Minute)
 	demux := twitter.NewSwitchDemux()
-	demux.All = func(msg interface{}) { handleAllMessages(ctx, bucket, msg) }
-	demux.Tweet = func(tweet *twitter.Tweet) { handleTweet(ctx, bucket, tweet) }
+	demux.All = func(msg interface{}) { handleAllMessages(ctx, bucket, logger, msg) }
+	demux.Tweet = func(tweet *twitter.Tweet) { handleTweet(ctx, bucket, logger, tweet) }
 	go demux.HandleChan(stream.Messages)
 	return stream, nil
 }
 
-func handleAllMessages(ctx context.Context, bucket *storage.BucketHandle, msg interface{}) {
+func handleAllMessages(ctx context.Context, bucket *storage.BucketHandle, logger *progress.WriterLogger, msg interface{}) {
 	if _, ok := msg.(*twitter.Tweet); ok {
 		return
 	}
 	log.Printf("%T", msg)
-	write(ctx, bucket, "messages", msg)
+	write(ctx, bucket, "messages", logger, msg)
 }
 
-func handleTweet(ctx context.Context, bucket *storage.BucketHandle, tweet *twitter.Tweet) {
-	write(ctx, bucket, "tweets", tweet)
+func handleTweet(ctx context.Context, bucket *storage.BucketHandle, logger *progress.WriterLogger, tweet *twitter.Tweet) {
+	write(ctx, bucket, "tweets", logger, tweet)
 }
 
-func write(ctx context.Context, bucket *storage.BucketHandle, folder string, data interface{}) {
+func write(ctx context.Context, bucket *storage.BucketHandle, folder string, logger *progress.WriterLogger, data interface{}) {
 	bs, err := json.Marshal(data)
 	if err != nil {
 		log.Printf("Error marshaling struct in %q: %v", folder, err)
@@ -193,10 +195,10 @@ func write(ctx context.Context, bucket *storage.BucketHandle, folder string, dat
 	date := time.Now().UTC().Format("2006-01-02")
 	name := fmt.Sprintf("%s/dt=%s/%v.json", folder, date, uuid.New())
 	w := bucket.Object(name).NewWriter(ctx)
-	if _, err := w.Write(bs); err != nil {
+	if n, err := w.Write(bs); err != nil {
 		log.Printf("Error writing data to %s: %v", name, err)
 	} else {
-		log.Printf("Wrote data to %s", name)
+		logger.Wrote(n)
 	}
 	if err := w.Close(); err != nil {
 		log.Printf("Error closing object %s: %v", name, err)
