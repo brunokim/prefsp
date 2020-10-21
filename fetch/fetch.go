@@ -57,12 +57,11 @@ func main() {
 	client := twitter.NewClient(authClient)
 
 	// Lookup user IDs to follow and start streaming their tweets
-	ids, err := lookupUserIds(client, app.names)
+	err = app.lookupUserIds(client)
 	if err != nil {
 		log.Fatalf("Error reading user IDs: %v", err)
 	}
-	app.ids = ids
-	stream, err := startStream(ctx, client, app)
+	stream, err := app.startStream(ctx, client)
 	if err != nil {
 		log.Fatalf("Error creating client: %v", err)
 	}
@@ -70,7 +69,11 @@ func main() {
 	// Block waiting for interrupt
 	ch := make(chan os.Signal)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-	<-ch
+
+	select {
+	case <-ch:
+	case <-ctx.Done():
+	}
 
 	// Exit
 	log.Print("Closing connections")
@@ -142,33 +145,34 @@ func newTwitterAuthClient() (*http.Client, error) {
 	return config.Client(oauth1.NoContext, token), nil
 }
 
-func lookupUserIds(client *twitter.Client, names []string) ([]int64, error) {
-	if len(names) == 0 {
-		return nil, nil
+func (app *app) lookupUserIds(client *twitter.Client) error {
+	if len(app.names) == 0 {
+		return nil
 	}
 	users, _, err := client.Users.Lookup(&twitter.UserLookupParams{
-		ScreenName:      names,
+		ScreenName:      app.names,
 		IncludeEntities: twitter.Bool(false),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("looking-up users: %v", err)
+		return fmt.Errorf("looking-up users: %v", err)
 	}
 	log.Print("Successfully read user ids for followed users")
 	m := make(map[string]int64)
 	for _, user := range users {
 		m[user.ScreenName] = user.ID
 	}
-	ids := make([]int64, len(names))
-	for i, name := range names {
-		ids[i], ok = m[name]
+	app.ids = make([]int64, len(app.names))
+	for i, name := range app.names {
+		var ok bool
+		app.ids[i], ok = m[name]
 		if !ok {
 			log.Printf("WARNING: no user ID found for %s", name)
 		}
 	}
-	return ids, nil
+	return nil
 }
 
-func startStream(ctx context.Context, client *twitter.Client, app *app) (*twitter.Stream, error) {
+func (app *app) startStream(ctx context.Context, client *twitter.Client) (*twitter.Stream, error) {
 	follow := make([]string, len(app.ids))
 	for i, id := range app.ids {
 		follow[i] = fmt.Sprintf("%d", id)
@@ -188,25 +192,25 @@ func startStream(ctx context.Context, client *twitter.Client, app *app) (*twitte
 	log.Printf("Languages:\n\t%v", strings.Join(app.langs, "\n\t"))
 	app.logger = progress.NewWriterLogger(time.Minute)
 	demux := twitter.NewSwitchDemux()
-	demux.All = func(msg interface{}) { handleAllMessages(ctx, app, msg) }
-	demux.Tweet = func(tweet *twitter.Tweet) { handleTweet(ctx, app, tweet) }
+	demux.All = func(msg interface{}) { app.handleAllMessages(ctx, msg) }
+	demux.Tweet = func(tweet *twitter.Tweet) { app.handleTweet(ctx, tweet) }
 	go demux.HandleChan(stream.Messages)
 	return stream, nil
 }
 
-func handleAllMessages(ctx context.Context, app *app, msg interface{}) {
+func (app *app) handleAllMessages(ctx context.Context, msg interface{}) {
 	if _, ok := msg.(*twitter.Tweet); ok {
 		return
 	}
 	log.Printf("%T", msg)
-	write(ctx, app, "messages", msg)
+	app.write(ctx, "messages", msg)
 }
 
-func handleTweet(ctx context.Context, app *app, tweet *twitter.Tweet) {
-	write(ctx, app, "tweets", tweet)
+func (app *app) handleTweet(ctx context.Context, tweet *twitter.Tweet) {
+	app.write(ctx, "tweets", tweet)
 }
 
-func write(ctx context.Context, app *app, folder string, data interface{}) {
+func (app *app) write(ctx context.Context, folder string, data interface{}) {
 	bs, err := json.Marshal(data)
 	if err != nil {
 		log.Printf("Error marshaling struct in %q: %v", folder, err)
