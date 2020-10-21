@@ -8,7 +8,7 @@ RUN go mod download
 
 # Copy all other non-ignored files and build binaries
 COPY . ./
-RUN go build -mod=readonly -v -o bin/fetch-tweets ./fetch
+RUN go build -mod=readonly -v -o fetch-tweets ./fetch
 
 ## Production container
 FROM debian:buster-slim
@@ -26,7 +26,9 @@ CMD [ \
     "-keywords", \
         "bruno covas,\
          russomano,\
-         joyce hasselmann,\
+         russomanno,\
+         celso russomanno,\
+         joice hasselmann,\
          jilmar tatto,\
          guilherme boulos,\
          boulos,\
@@ -41,5 +43,20 @@ CMD [ \
          vera lúcia,\
          eleições sp,\
          prefeitura sp",\
+     "-follow", \
+        "brunocovas,\
+         celsorussomanno,\
+         joicehasselmann,\
+         jilmartatto,\
+         GuilhermeBoulos,\
+         AndreaMatarazzo,\
+         arthurmoledoval,\
+         marina_helou,\
+         orlandosilva,\
+         levyfidelix,\
+         filipesabara,\
+         marciofrancasp,\
+         folhasp,\
+         Estadao",\
      "-languages", ""]
 

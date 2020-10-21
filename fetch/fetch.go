@@ -85,6 +85,9 @@ func checkFlags() ([]string, []string, []string, string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("malformed %s flag: %v", name, err)
 		}
+		for i, value := range values {
+			values[i] = strings.TrimSpace(value)
+		}
 		return values, nil
 	}
 	terms, err1 := parseCommaFlag("keywords", *keywords)
@@ -148,9 +151,6 @@ func startStream(ctx context.Context, bucket *storage.BucketHandle, client *twit
 	follow := make([]string, len(ids))
 	for i, id := range ids {
 		follow[i] = fmt.Sprintf("%d", id)
-	}
-	for i, term := range terms {
-		terms[i] = strings.TrimSpace(term)
 	}
 	stream, err := client.Streams.Filter(&twitter.StreamFilterParams{
 		Track:         terms,
