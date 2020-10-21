@@ -26,6 +26,7 @@ import (
 
 var (
 	keywords   = flag.String("keywords", "", "Set of comma-separated keywords to track")
+	follow     = flag.String("follow", "", "Set of comma-separated screen names to track")
 	languages  = flag.String("languages", "pt", "Set of comma-separated languages to filter")
 	bucketName = flag.String("bucket", "prefs-2020", "Bucket for storing tweets objects")
 )
@@ -33,7 +34,7 @@ var (
 func main() {
 	// Initial setup
 	flag.Parse()
-	keywords, languages, bucketName, err := checkFlags()
+	keywords, names, languages, bucketName, err := checkFlags()
 	if err != nil {
 		log.Fatalf("Error while validating flags: %v", err)
 	}
@@ -47,13 +48,19 @@ func main() {
 	bucket := fs.Bucket(bucketName)
 	log.Printf("Connected to Cloud Storage")
 
-	// Connect to Twitter and start handling messages
+	// Connect to Twitter
 	authClient, err := newTwitterAuthClient()
 	if err != nil {
 		log.Fatalf("Error creating auth client: %v", err)
 	}
 	client := twitter.NewClient(authClient)
-	stream, err := startStream(ctx, bucket, client, keywords, languages)
+
+	// Lookup user IDs to follow and start streaming their tweets
+	ids, err := lookupUserIds(client, names)
+	if err != nil {
+		log.Fatalf("Error reading user IDs: %v", err)
+	}
+	stream, err := startStream(ctx, bucket, client, keywords, ids, languages)
 	if err != nil {
 		log.Fatalf("Error creating client: %v", err)
 	}
@@ -69,25 +76,30 @@ func main() {
 	fs.Close()
 }
 
-func checkFlags() ([]string, []string, string, error) {
-	if *keywords == "" {
-		return nil, nil, "", fmt.Errorf("keywords flag cannot be empty")
+func checkFlags() ([]string, []string, []string, string, error) {
+	parseCommaFlag := func(name, line string) ([]string, error) {
+		if line == "" {
+			return nil, nil
+		}
+		values, err := csv.NewReader(strings.NewReader(line)).Read()
+		if err != nil {
+			return nil, fmt.Errorf("malformed %s flag: %v", name, err)
+		}
+		return values, nil
 	}
-	terms, err := csv.NewReader(strings.NewReader(*keywords)).Read()
-	if err != nil {
-		return nil, nil, "", fmt.Errorf("malformed keywords flag: %v", err)
+	terms, err1 := parseCommaFlag("keywords", *keywords)
+	names, err2 := parseCommaFlag("follow", *follow)
+	langs, err3 := parseCommaFlag("languages", *languages)
+	if err := errors.NewErrorList(err1, err2, err3); err != nil {
+		return nil, nil, nil, "", err
+	}
+	if len(terms) == 0 && len(names) == 0 {
+		return nil, nil, nil, "", fmt.Errorf("keywords and follow flags cannot both be empty")
 	}
 	if *bucketName == "" {
-		return nil, nil, "", fmt.Errorf("empty bucket name flag")
+		return nil, nil, nil, "", fmt.Errorf("empty bucket name flag")
 	}
-	var langs []string
-	if *languages != "" {
-		langs, err = csv.NewReader(strings.NewReader(*languages)).Read()
-		if err != nil {
-			return nil, nil, "", fmt.Errorf("malformed languages flag: %v", err)
-		}
-	}
-	return terms, langs, *bucketName, nil
+	return terms, names, langs, *bucketName, nil
 }
 
 func newTwitterAuthClient() (*http.Client, error) {
@@ -110,16 +122,49 @@ func newTwitterAuthClient() (*http.Client, error) {
 	return config.Client(oauth1.NoContext, token), nil
 }
 
-func startStream(ctx context.Context, bucket *storage.BucketHandle, client *twitter.Client, terms []string, languages []string) (*twitter.Stream, error) {
+func lookupUserIds(client *twitter.Client, names []string) ([]int64, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	users, _, err := client.Users.Lookup(&twitter.UserLookupParams{
+		ScreenName:      names,
+		IncludeEntities: twitter.Bool(false),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("looking-up users: %v", err)
+	}
+	m := make(map[string]int64)
+	for _, user := range users {
+		m[user.ScreenName] = user.ID
+	}
+	ids := make([]int64, len(names))
+	for i, name := range names {
+		ids[i] = m[name]
+	}
+	return ids, nil
+}
+
+func startStream(ctx context.Context, bucket *storage.BucketHandle, client *twitter.Client, terms []string, ids []int64, languages []string) (*twitter.Stream, error) {
+	follow := make([]string, len(ids))
+	for i, id := range ids {
+		follow[i] = fmt.Sprintf("%d", id)
+	}
+	for i, term := range terms {
+		terms[i] = strings.TrimSpace(term)
+	}
 	stream, err := client.Streams.Filter(&twitter.StreamFilterParams{
 		Track:         terms,
+		Follow:        follow,
 		Language:      languages,
 		StallWarnings: twitter.Bool(true),
 	})
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Successfully connected to Twitter stream for terms %v in languages %v", terms, languages)
+	log.Print("Successfully connected to Twitter stream")
+	log.Printf("Terms:\n\t%v", strings.Join(terms, "\n\t"))
+	log.Printf("Users:\n\t%v", strings.Join(follow, "\n\t"))
+	log.Printf("Languages:\n\t%v", strings.Join(languages, "\n\t"))
 	demux := twitter.NewSwitchDemux()
 	demux.All = func(msg interface{}) { handleAllMessages(ctx, bucket, msg) }
 	demux.Tweet = func(tweet *twitter.Tweet) { handleTweet(ctx, bucket, tweet) }
