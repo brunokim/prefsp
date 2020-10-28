@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/brunokim/prefsp/contexts"
+	"github.com/brunokim/prefsp/progress"
 
 	"cloud.google.com/go/storage"
-	"github.com/cheggaaa/pb/v3"
 	"github.com/dghubble/go-twitter/twitter"
 	"google.golang.org/api/iterator"
 
@@ -83,8 +83,6 @@ func runPipeline(ctx context.Context, bucket *storage.BucketHandle, inFolder, ou
 	names, namesErr := objectNames(ctx, bucket, prefix)
 	results := readTweets(ctx, bucket, names)
 	writeErr := writeTweets(ctx, bucket, output, results)
-	bar := pb.StartNew(-1)
-	defer bar.Finish()
 	for {
 		select {
 		case err, ok := <-writeErr:
@@ -95,7 +93,6 @@ func runPipeline(ctx context.Context, bucket *storage.BucketHandle, inFolder, ou
 				log.Printf("Write error: %v", err)
 				continue
 			}
-			bar.Increment()
 		case err := <-namesErr:
 			if err != nil {
 				return fmt.Errorf("reading object names: %v", err)
@@ -194,13 +191,14 @@ func readObject(ctx context.Context, bucket *storage.BucketHandle, name string) 
 
 func writeTweets(ctx context.Context, bucket *storage.BucketHandle, output string, results <-chan readResult) <-chan error {
 	out := make(chan error)
+	logger := progress.NewWriterLogger(5 * time.Second)
 	go func() {
 		defer close(out)
 		w := bucket.Object(output).NewWriter(ctx)
 		defer w.Close()
 		for result := range results {
 			select {
-			case out <- writeTweet(w, result):
+			case out <- writeTweet(w, result, logger):
 			case <-ctx.Done():
 				return
 			}
@@ -209,7 +207,7 @@ func writeTweets(ctx context.Context, bucket *storage.BucketHandle, output strin
 	return out
 }
 
-func writeTweet(w io.Writer, result readResult) error {
+func writeTweet(w io.Writer, result readResult, logger *progress.WriterLogger) error {
 	if result.err != nil {
 		return fmt.Errorf("tweet %q: %v", result.name, result.err)
 	}
@@ -219,10 +217,11 @@ func writeTweet(w io.Writer, result readResult) error {
 		return fmt.Errorf("marshaling %q: %v", result.name, err)
 	}
 	bs = append(bs, '\n')
-	_, err = w.Write(bs)
+	n, err := w.Write(bs)
 	if err != nil {
 		return fmt.Errorf("writing %q: %v", result.name, err)
 	}
+	logger.Wrote(n)
 	return nil
 }
 
