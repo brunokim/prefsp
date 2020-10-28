@@ -8,26 +8,35 @@ import (
 )
 
 type WriterLogger struct {
-	ch chan int
+	ch     chan int
+	done   chan struct{}
+	ticker *time.Ticker
 }
 
 func NewWriterLogger(period time.Duration) *WriterLogger {
 	l := new(WriterLogger)
 	l.ch = make(chan int, 1)
+	l.done = make(chan struct{})
+	l.ticker = time.NewTicker(period)
 	go func() {
 		var numFiles, numBytes int
 		start := time.Now()
-		ticker := time.NewTicker(period)
+		tick := func() {
+			elapsed := time.Since(start)
+			fileRate := float64(numFiles) / elapsed.Minutes()
+			byteRate := float64(numBytes) / elapsed.Seconds()
+			log.Printf("Wrote %5d files (%.2f files/min) with %s (%s/s)", numFiles, fileRate, byteUnit(float64(numBytes)), byteUnit(byteRate))
+		}
 		for {
 			select {
 			case n := <-l.ch:
 				numFiles++
 				numBytes += n
-			case <-ticker.C:
-				elapsed := time.Since(start)
-				fileRate := float64(numFiles) / elapsed.Minutes()
-				byteRate := float64(numBytes) / elapsed.Seconds()
-				log.Printf("Wrote %5d files (%.2f files/min) with %s (%s/s)", numFiles, fileRate, byteUnit(float64(numBytes)), byteUnit(byteRate))
+			case <-l.ticker.C:
+				tick()
+			case <-l.done:
+				// Final write
+				tick()
 			}
 		}
 	}()
@@ -36,6 +45,11 @@ func NewWriterLogger(period time.Duration) *WriterLogger {
 
 func (l *WriterLogger) Wrote(n int) {
 	l.ch <- n
+}
+
+func (l *WriterLogger) Stop() {
+	l.ticker.Stop()
+	l.done <- struct{}{}
 }
 
 func byteUnit(x float64) string {

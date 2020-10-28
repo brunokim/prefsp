@@ -68,6 +68,7 @@ func main() {
 
 	// Block waiting for context cancellation, then exit.
 	<-ctx.Done()
+	app.logger.Stop()
 	log.Print("Closing connections")
 	stream.Stop()
 	fs.Close()

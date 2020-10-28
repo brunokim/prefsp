@@ -81,18 +81,21 @@ func runPipeline(ctx context.Context, bucket *storage.BucketHandle, inFolder, ou
 	prefix := fmt.Sprintf("%s/dt=%s/", inFolder, date)
 	output := fmt.Sprintf("%s/%s.jsonl", outFolder, date)
 	names, namesErr := objectNames(ctx, bucket, prefix)
-	results := readTweets(ctx, bucket, names)
-	writeErr := writeTweets(ctx, bucket, output, results)
+	reads := readTweets(ctx, bucket, names)
+	writes := writeTweets(ctx, bucket, output, reads)
+	logger := progress.NewWriterLogger(5 * time.Second)
+	defer logger.Stop()
 	for {
 		select {
-		case err, ok := <-writeErr:
+		case result, ok := <-writes:
 			if !ok {
 				return nil
 			}
-			if err != nil {
-				log.Printf("Write error: %v", err)
+			if result.err != nil {
+				log.Printf("Write error: %v", result.err)
 				continue
 			}
+			logger.Wrote(result.n)
 		case err := <-namesErr:
 			if err != nil {
 				return fmt.Errorf("reading object names: %v", err)
@@ -189,16 +192,21 @@ func readObject(ctx context.Context, bucket *storage.BucketHandle, name string) 
 	return &tweet, nil
 }
 
-func writeTweets(ctx context.Context, bucket *storage.BucketHandle, output string, results <-chan readResult) <-chan error {
-	out := make(chan error)
-	logger := progress.NewWriterLogger(5 * time.Second)
+type writeResult struct {
+	n   int
+	err error
+}
+
+func writeTweets(ctx context.Context, bucket *storage.BucketHandle, output string, reads <-chan readResult) <-chan writeResult {
+	out := make(chan writeResult)
 	go func() {
 		defer close(out)
 		w := bucket.Object(output).NewWriter(ctx)
 		defer w.Close()
-		for result := range results {
+		for result := range reads {
+			n, err := writeTweet(w, result)
 			select {
-			case out <- writeTweet(w, result, logger):
+			case out <- writeResult{n, err}:
 			case <-ctx.Done():
 				return
 			}
@@ -207,22 +215,21 @@ func writeTweets(ctx context.Context, bucket *storage.BucketHandle, output strin
 	return out
 }
 
-func writeTweet(w io.Writer, result readResult, logger *progress.WriterLogger) error {
+func writeTweet(w io.Writer, result readResult) (int, error) {
 	if result.err != nil {
-		return fmt.Errorf("tweet %q: %v", result.name, result.err)
+		return -1, fmt.Errorf("tweet %q: %v", result.name, result.err)
 	}
 	cleanTweet(result.tweet)
 	bs, err := json.Marshal(result.tweet)
 	if err != nil {
-		return fmt.Errorf("marshaling %q: %v", result.name, err)
+		return -1, fmt.Errorf("marshaling %q: %v", result.name, err)
 	}
 	bs = append(bs, '\n')
 	n, err := w.Write(bs)
 	if err != nil {
-		return fmt.Errorf("writing %q: %v", result.name, err)
+		return -1, fmt.Errorf("writing %q: %v", result.name, err)
 	}
-	logger.Wrote(n)
-	return nil
+	return n, nil
 }
 
 func cleanTweet(tweet *twitter.Tweet) {
