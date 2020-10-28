@@ -9,11 +9,10 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
+	"github.com/brunokim/prefsp/contexts"
 	"github.com/brunokim/prefsp/errors"
 	"github.com/brunokim/prefsp/progress"
 
@@ -39,9 +38,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error while validating flags: %v", err)
 	}
+	ctx, cancel := contexts.WithInterrupt(context.Background())
+	defer cancel()
 
 	// Connect to Cloud Storage
-	ctx := context.Background()
 	fs, err := storage.NewClient(ctx)
 	if err != nil {
 		log.Fatalf("Error while connecting to Cloud Storage: %v", err)
@@ -66,16 +66,8 @@ func main() {
 		log.Fatalf("Error creating client: %v", err)
 	}
 
-	// Block waiting for interrupt
-	ch := make(chan os.Signal)
-	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-
-	select {
-	case <-ch:
-	case <-ctx.Done():
-	}
-
-	// Exit
+	// Block waiting for context cancellation, then exit.
+	<-ctx.Done()
 	log.Print("Closing connections")
 	stream.Stop()
 	fs.Close()
