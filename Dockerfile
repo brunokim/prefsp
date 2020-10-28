@@ -8,7 +8,7 @@ RUN go mod download
 
 # Copy all other non-ignored files and build binaries
 COPY . ./
-RUN go build -mod=readonly -v -o fetch-tweets ./fetch
+RUN go build -mod=readonly -v -o bin/fetch-tweets ./fetch-tweets
 
 ## Production container
 FROM debian:buster-slim

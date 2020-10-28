@@ -13,17 +13,17 @@ Contém os comandos para compilar e executar os serviços necessários.
     docker push gcr.io/prefs-2020/fetch-tweets
     gcloud ...
 
-## `fetch/`
+## `fetch-tweets/`
 
 Conecta com o Twitter para baixar em tempo real os tweets relacionados ao termos selecionados, e
 armazena os tweets individuais em formato JSON *sem processamento* em um bucket do Google Cloud Storage.
 
 ### Instruções de uso
 
-    go build -o bin/fetch fetch/*.go
-    bin/fetch -keywords "#FocoForcaFe,bruno covas" -languages "pt" -follow "brunocovas"
+    go build -o bin/fetch-tweets ./fetch-tweets
+    bin/fetch-tweets -keywords "#FocoForcaFe,bruno covas" -languages "pt" -follow "brunocovas"
 
-## `filter/`
+## `bq-filter/`
 
 Lê os objetos presentes em uma pasta específica do bucket (e.g., `tweets/dt=2020-10-18`), limpa
 alguns de seus campos que causam problemas ao importar no BigQuery, e então escreve em um único arquivo
@@ -34,5 +34,10 @@ menos não para o volume diário atual de tweets (~20.000 tweets/dia são lidos 
 
 ### Instruções de uso
 
-    go build -o bin/filter filter/*.go
-    bin/filter -ingest-date 2020-10-27
+    go build -o bin/bq-filter ./bq-filter
+    bin/bq-filter -ingest-date 2020-10-27
+    bq load \
+        --autodetect \
+        --source_format NEWLINE_DELIMITED_JSON \
+        'prefs-2020:tweets.2020_10_27' \
+        gs://prefs-2020/filtered-tweets/2020-10-27.jsonl
