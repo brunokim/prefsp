@@ -228,6 +228,7 @@ func writeTweet(w io.Writer, result readResult) error {
 
 func cleanTweet(tweet *twitter.Tweet) {
 	// Removing problematic fields for later processing with BigQuery.
+	tweet.Coordinates = nil
 	tweet.Entities = nil
 	tweet.WithheldInCountries = nil
 	if tweet.Place != nil {
