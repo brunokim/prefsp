@@ -203,10 +203,16 @@ func writeTweets(ctx context.Context, bucket *storage.BucketHandle, output strin
 		defer close(out)
 		w := bucket.Object(output).NewWriter(ctx)
 		defer w.Close()
-		for result := range reads {
-			n, err := writeTweet(w, result)
+		for read := range reads {
+			var result writeResult
+			if read.err != nil {
+				result = writeResult{-1, fmt.Errorf("tweet %q: %v", read.name, read.err)}
+			} else {
+				n, err := writeTweet(w, read.name, read.tweet)
+				result = writeResult{n, err}
+			}
 			select {
-			case out <- writeResult{n, err}:
+			case out <- result:
 			case <-ctx.Done():
 				return
 			}
@@ -215,19 +221,16 @@ func writeTweets(ctx context.Context, bucket *storage.BucketHandle, output strin
 	return out
 }
 
-func writeTweet(w io.Writer, result readResult) (int, error) {
-	if result.err != nil {
-		return -1, fmt.Errorf("tweet %q: %v", result.name, result.err)
-	}
-	cleanTweet(result.tweet)
-	bs, err := json.Marshal(result.tweet)
+func writeTweet(w io.Writer, name string, tweet *twitter.Tweet) (int, error) {
+	cleanTweet(tweet)
+	bs, err := json.Marshal(tweet)
 	if err != nil {
-		return -1, fmt.Errorf("marshaling %q: %v", result.name, err)
+		return -1, fmt.Errorf("marshaling %q: %v", name, err)
 	}
 	bs = append(bs, '\n')
 	n, err := w.Write(bs)
 	if err != nil {
-		return -1, fmt.Errorf("writing %q: %v", result.name, err)
+		return -1, fmt.Errorf("writing %q: %v", name, err)
 	}
 	return n, nil
 }
